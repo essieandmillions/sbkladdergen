@@ -1,0 +1,32 @@
+name: Secondary Backup Monitor
+'on':
+  schedule:
+  - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+jobs:
+  backup-health-check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Secondary health verification
+      id: verify
+      run: "SITE_URL=\"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name\
+        \ }}\"\necho \"\U0001F50D Secondary monitor checking $SITE_URL\"\n\n# Try\
+        \ 3 times with 10 second intervals\nfor i in 1 2 3; do\n  RESPONSE=$(curl\
+        \ -s -o /dev/null -w \"%{http_code}\" \"$SITE_URL\" || echo \"000\")\n  echo\
+        \ \"Attempt $i: HTTP $RESPONSE\"\n\n  if [ \"$RESPONSE\" = \"200\" ]; then\n\
+        \    echo \"\u2713 Site confirmed healthy on attempt $i\"\n    exit 0\n  fi\n\
+        \n  if [ $i -lt 3 ]; then\n    echo \"Retrying in 10 seconds...\"\n    sleep\
+        \ 10\n  fi\ndone\n\necho \"\u274C Site failed all 3 health checks\"\nexit\
+        \ 1"
+    - name: Emergency self-heal
+      if: failure()
+      uses: actions/checkout@v4
+    - name: Force rebuild and redeploy
+      if: failure()
+      run: "echo \"\U0001F6A8 EMERGENCY SELF-HEALING ACTIVATED\"\necho \"Timestamp:\
+        \ $(date)\" >> HEALTH_LOG.md\ngit config user.name \"Auto-Heal Bot\"\ngit\
+        \ config user.email \"actions@github.com\"\ngit add HEALTH_LOG.md\ngit commit\
+        \ -m \"Emergency heal: $(date)\" || true\ngit push || true\ngh workflow run\
+        \ deploy.yml"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
