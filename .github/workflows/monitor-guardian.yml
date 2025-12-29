@@ -1,0 +1,27 @@
+name: Tertiary Guardian Monitor
+'on':
+  schedule:
+  - cron: 0 * * * *
+  workflow_dispatch: {}
+jobs:
+  guardian-check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check all systems
+      run: "echo \"\U0001F6E1\uFE0F Guardian monitor performing comprehensive check\"\
+        \nSITE_URL=\"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name\
+        \ }}\"\n\n# Verify site is accessible\nRESPONSE=$(curl -s -o /dev/null -w\
+        \ \"%{http_code}\" \"$SITE_URL\" || echo \"000\")\nif [ \"$RESPONSE\" != \"\
+        200\" ]; then\n  echo \"\u26A0\uFE0F Guardian detected site issue - triggering\
+        \ emergency procedures\"\n  exit 1\nfi\n\necho \"\u2713 Guardian confirms\
+        \ all systems operational\"\necho \"Last guardian check: $(date)\" > guardian-status.txt"
+    - name: Emergency recovery
+      if: failure()
+      uses: actions/checkout@v4
+    - name: Full system recovery
+      if: failure()
+      run: "echo \"\U0001F6A8\U0001F6A8 GUARDIAN EMERGENCY RECOVERY INITIATED \U0001F6A8\
+        \U0001F6A8\"\ngh workflow run deploy.yml\ngh workflow run monitor-primary.yml\n\
+        gh workflow run monitor-secondary.yml"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
