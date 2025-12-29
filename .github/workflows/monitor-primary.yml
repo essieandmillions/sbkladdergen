@@ -1,0 +1,26 @@
+name: Primary Site Monitor
+'on':
+  schedule:
+  - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check site health
+      id: health
+      run: "SITE_URL=\"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name\
+        \ }}\"\necho \"Checking $SITE_URL\"\nRESPONSE=$(curl -s -o /dev/null -w \"\
+        %{http_code}\" \"$SITE_URL\" || echo \"000\")\necho \"response=$RESPONSE\"\
+        \ >> $GITHUB_OUTPUT\nif [ \"$RESPONSE\" != \"200\" ]; then\n  echo \"\u274C\
+        \ Site is DOWN (HTTP $RESPONSE)\"\n  exit 1\nelse\n  echo \"\u2713 Site is\
+        \ UP (HTTP $RESPONSE)\"\nfi"
+    - name: 'Self-heal: Trigger redeployment'
+      if: failure()
+      uses: actions/checkout@v4
+    - name: Trigger deploy workflow
+      if: failure()
+      run: "echo \"\U0001F527 Initiating self-healing deployment...\"\ngh workflow\
+        \ run deploy.yml"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
