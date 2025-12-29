@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SBK Ladder Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', -apple-system, sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-6">
+    <div id="app" class="max-w-4xl mx-auto"></div>
+
+    <script>
+        // Simple localStorage-based ladder manager
+        class LadderManager {
+            constructor() {
+                this.ladders = this.loadLadders();
+                this.render();
+            }
+
+            loadLadders() {
+                const stored = localStorage.getItem('sbk-ladders');
+                return stored ? JSON.parse(stored) : [];
+            }
+
+            saveLadders() {
+                localStorage.setItem('sbk-ladders', JSON.stringify(this.ladders));
+            }
+
+            calculateProfit(stake, odds) {
+                const trimmed = String(odds).trim();
+                if (trimmed.length < 2) return 0;
+
+                const sign = trimmed[0];
+                const num = parseFloat(trimmed.slice(1));
+                if (isNaN(num) || num <= 0) return 0;
+
+                let profit = 0;
+                if (sign === '+') {
+                    profit = stake * (num / 100);
+                } else if (sign === '-') {
+                    profit = stake / (num / 100);
+                }
+                return parseFloat(profit.toFixed(2));
+            }
+
+            calculateLadder(start, goal, odds) {
+                const ladder = [];
+                let current = parseFloat(start);
+                const finalGoal = parseFloat(goal);
+                let day = 1;
+
+                while (current < finalGoal && day <= 500) {
+                    const profit = this.calculateProfit(current, odds);
+                    const next = current + profit;
+
+                    ladder.push({
+                        day,
+                        stake: current,
+                        profit,
+                        nextBalance: next,
+                        isGoal: next >= finalGoal
+                    });
+
+                    if (next >= finalGoal) break;
+                    current = next;
+                    day++;
+                }
+                return ladder;
+            }
+
+            addLadder(name, start, goal, odds) {
+                const ladder = this.calculateLadder(start, goal, odds);
+                this.ladders.push({
+                    id: Date.now(),
+                    name,
+                    start: parseFloat(start),
+                    goal: parseFloat(goal),
+                    odds,
+                    current: parseFloat(start),
+                    step: 0,
+                    ladder
+                });
+                this.saveLadders();
+                this.render();
+            }
+
+            markWin(id) {
+                const ladder = this.ladders.find(l => l.id === id);
+                if (!ladder || ladder.step >= ladder.ladder.length) return;
+
+                const stepData = ladder.ladder[ladder.step];
+                ladder.current = stepData.nextBalance;
+                ladder.step++;
+                this.saveLadders();
+                this.render();
+            }
+
+            markLoss(id) {
+                const ladder = this.ladders.find(l => l.id === id);
+                if (!ladder) return;
+
+                ladder.current = ladder.start;
+                ladder.step = 0;
+                this.saveLadders();
+                this.render();
+            }
+
+            deleteLadder(id) {
+                this.ladders = this.ladders.filter(l => l.id !== id);
+                this.saveLadders();
+                this.render();
+            }
+
+            render() {
+                const app = document.getElementById('app');
+                const active = this.ladders[0];
+
+                app.innerHTML = `
+                    <h1 class="text-4xl font-bold text-center text-sky-400 mb-8">
+                        EssieSbk Ladder Manager
+                    </h1>
+
+                    <div class="bg-gray-800 rounded-xl p-6 mb-8">
+                        <h2 class="text-xl font-bold mb-4">Create New Ladder</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <input id="name" placeholder="Ladder Name" class="p-3 rounded bg-gray-950 border border-gray-700">
+                            <input id="start" placeholder="Start $" type="number" class="p-3 rounded bg-gray-950 border border-gray-700">
+                            <input id="goal" placeholder="Goal $" type="number" class="p-3 rounded bg-gray-950 border border-gray-700">
+                            <input id="odds" placeholder="+150 or -110" class="p-3 rounded bg-gray-950 border border-gray-700">
+                        </div>
+                        <button onclick="manager.createLadder()" class="mt-4 w-full py-3 bg-indigo-600 rounded-lg font-bold hover:bg-indigo-700">
+                            Create Ladder
+                        </button>
+                    </div>
+
+                    ${active ? `
+                        <div class="bg-gray-800 rounded-xl p-6 mb-8">
+                            <h2 class="text-2xl font-bold mb-4">${active.name}</h2>
+
+                            <div class="grid grid-cols-2 gap-4 mb-6 text-center">
+                                <div>
+                                    <div class="text-4xl font-bold text-sky-400">$${active.current.toFixed(2)}</div>
+                                    <div class="text-sm text-gray-400">Current Balance</div>
+                                </div>
+                                <div>
+                                    <div class="text-4xl font-bold text-sky-400">${active.step} / ${active.ladder.length}</div>
+                                    <div class="text-sm text-gray-400">Steps (Goal: $${active.goal.toFixed(2)})</div>
+                                </div>
+                            </div>
+
+                            ${active.step < active.ladder.length ? `
+                                <div class="bg-sky-900/50 p-4 rounded-lg mb-4">
+                                    <div class="text-center">
+                                        <div class="text-sm text-gray-400">Next Stake (Day ${active.step + 1})</div>
+                                        <div class="text-5xl font-bold text-sky-300">$${active.ladder[active.step].stake.toFixed(2)}</div>
+                                        <div class="text-sm text-emerald-400 mt-2">Win: +$${active.ladder[active.step].profit.toFixed(2)} = $${active.ladder[active.step].nextBalance.toFixed(2)}</div>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4">
+                                    <button onclick="manager.markWin(${active.id})" class="py-4 bg-emerald-600 rounded-lg font-bold hover:bg-emerald-700">
+                                        ✓ Win
+                                    </button>
+                                    <button onclick="manager.markLoss(${active.id})" class="py-4 bg-red-600 rounded-lg font-bold hover:bg-red-700">
+                                        ✗ Loss (Reset)
+                                    </button>
+                                </div>
+                            ` : `
+                                <div class="text-center text-2xl font-bold text-emerald-400 py-8">
+                                    🎉 GOAL REACHED! $${active.current.toFixed(2)}
+                                </div>
+                            `}
+                        </div>
+
+                        <div class="bg-gray-800 rounded-xl p-6">
+                            <h3 class="text-xl font-bold mb-4">Full Ladder Steps</h3>
+                            <div class="overflow-x-auto">
+                                <table class="w-full">
+                                    <thead class="bg-gray-950">
+                                        <tr>
+                                            <th class="p-3 text-left">Day</th>
+                                            <th class="p-3 text-left">Stake</th>
+                                            <th class="p-3 text-left">Profit</th>
+                                            <th class="p-3 text-left">Balance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${active.ladder.map((step, i) => `
+                                            <tr class="${i < active.step ? 'bg-emerald-900/20 text-emerald-300' : i === active.step ? 'bg-sky-900/40 text-sky-300 font-bold' : 'text-gray-400'}">
+                                                <td class="p-3">${step.day}</td>
+                                                <td class="p-3">$${step.stake.toFixed(2)}</td>
+                                                <td class="p-3">$${step.profit.toFixed(2)}</td>
+                                                <td class="p-3">$${step.nextBalance.toFixed(2)}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="text-center text-gray-500 py-12">
+                            No ladders yet. Create one above!
+                        </div>
+                    `}
+
+                    ${this.ladders.length > 0 ? `
+                        <div class="mt-8">
+                            <h3 class="text-xl font-bold mb-4">All Ladders</h3>
+                            <div class="space-y-2">
+                                ${this.ladders.map(l => `
+                                    <div class="bg-gray-800 p-4 rounded-lg flex justify-between items-center">
+                                        <div>
+                                            <div class="font-bold">${l.name}</div>
+                                            <div class="text-sm text-gray-400">$${l.current.toFixed(2)} / $${l.goal.toFixed(2)} (Step ${l.step}/${l.ladder.length})</div>
+                                        </div>
+                                        <button onclick="manager.deleteLadder(${l.id})" class="px-4 py-2 bg-red-600 rounded hover:bg-red-700">
+                                            Delete
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                `;
+            }
+
+            createLadder() {
+                const name = document.getElementById('name').value.trim();
+                const start = document.getElementById('start').value;
+                const goal = document.getElementById('goal').value;
+                const odds = document.getElementById('odds').value.trim();
+
+                if (!name || !start || !goal || !odds) {
+                    alert('Please fill all fields');
+                    return;
+                }
+
+                if (!odds.match(/^[+-]\d+$/)) {
+                    alert('Odds must be in format +150 or -110');
+                    return;
+                }
+
+                this.addLadder(name, start, goal, odds);
+
+                document.getElementById('name').value = '';
+                document.getElementById('start').value = '';
+                document.getElementById('goal').value = '';
+                document.getElementById('odds').value = '';
+            }
+        }
+
+        const manager = new LadderManager();
+    </script>
+</body>
+</html>
