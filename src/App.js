@@ -1,25 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, onSnapshot, collection, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { X, ChevronRight, CheckCircle, Flame, DollarSign, Target, AlertTriangle, Trash2 } from 'lucide-react';
 
 // --- Constants ---
 const CASHOUT_LIMIT = 50;
-const LADDER_COLLECTION_NAME = 'ladders';
 const WIN_TIMEOUT_MS = 3000;
-
-// --- Global Setup (Required by Environment) ---
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-let firebaseConfig = {};
-try {
-    const configString = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
-    firebaseConfig = JSON.parse(configString);
-} catch (e) {
-    console.error("CRITICAL: Failed to parse __firebase_config. Using empty config.", e);
-}
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
+const STORAGE_KEY = 'sbk_ladders';
 
 // Utility function to calculate profit based on American Odds
 const calculateProfit = (stake, oddsString) => {
@@ -44,14 +29,6 @@ const calculateProfit = (stake, oddsString) => {
 
 // Main App Component
 const App = () => {
-    // Firebase States
-    const [db, setDb] = useState(null);
-    const [auth, setAuth] = useState(null);
-    const [userId, setUserId] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false);
-    const [isLoading, setIsLoading] = useState(true);
-    const [initError, setInitError] = useState(null);
-
     // Input States
     const [ladderNameInput, setLadderNameInput] = useState('');
     const [startStakeInput, setStartStakeInput] = useState('');
@@ -61,126 +38,37 @@ const App = () => {
     // Tracking States
     const [allLadders, setAllLadders] = useState([]);
     const [selectedLadderId, setSelectedLadderId] = useState(null);
-    const [message, setMessage] = useState('Initializing...');
+    const [message, setMessage] = useState('Ready to track your ladders!');
     const [isSaving, setIsSaving] = useState(false);
     const [winClickState, setWinClickState] = useState('ready');
     const [isDeletePending, setIsDeletePending] = useState(false);
 
-    // --- Firebase Initialization and Authentication ---
+    // Load ladders from localStorage on mount
     useEffect(() => {
-        const initFirebase = async () => {
-            try {
-                if (Object.keys(firebaseConfig).length === 0) {
-                     setInitError('Firebase configuration is missing.');
-                     setIsLoading(false);
-                     return;
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            if (stored) {
+                const ladders = JSON.parse(stored);
+                setAllLadders(ladders);
+                if (ladders.length > 0 && !selectedLadderId) {
+                    setSelectedLadderId(ladders[0].id);
                 }
-
-                // Initialize Firebase SDKs
-                const app = initializeApp(firebaseConfig);
-                const authInstance = getAuth(app);
-                const dbInstance = getFirestore(app);
-
-                setAuth(authInstance);
-                setDb(dbInstance);
-
-                // Set up Auth State Listener
-                const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
-                    if (!user) {
-                        try {
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(authInstance, initialAuthToken);
-                            } else {
-                                await signInAnonymously(authInstance);
-                            }
-                        } catch (error) {
-                            console.error("Firebase sign-in failed:", error);
-                            setInitError(`Sign-in Error: ${error.message}`);
-                            setIsLoading(false);
-                            return;
-                        }
-                    }
-
-                    // Set User ID and mark Auth as ready
-                    const currentUid = authInstance.currentUser?.uid || crypto.randomUUID();
-                    setUserId(currentUid); 
-                    setIsAuthReady(true);
-                    setMessage('Authentication complete. Loading data...');
-                });
-
-                return () => unsubscribe();
-            } catch (error) {
-                console.error("CRITICAL Firebase initialization failed:", error);
-                setInitError(`App Initialization Failed: ${error.message}`);
-                setIsLoading(false);
             }
-        };
-
-        initFirebase();
+        } catch (e) {
+            console.error('Error loading ladders:', e);
+        }
     }, []);
 
-    // --- Firebase Data Path and References ---
-    const getLadderCollectionRef = useCallback(() => {
-        if (db && userId) {
-            return collection(db, `artifacts/${appId}/users/${userId}/${LADDER_COLLECTION_NAME}`);
-        }
-        return null;
-    }, [db, userId]);
-
-    const getLadderDocRef = useCallback((ladderId) => {
-        const colRef = getLadderCollectionRef();
-        if (colRef && ladderId) {
-            return doc(colRef, ladderId);
-        }
-        return null;
-    }, [getLadderCollectionRef]);
-
-    // --- Load All Ladders from Firestore (Realtime Listener) ---
+    // Save ladders to localStorage whenever they change
     useEffect(() => {
-        if (!isAuthReady || !userId || !db) return;
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(allLadders));
+        } catch (e) {
+            console.error('Error saving ladders:', e);
+        }
+    }, [allLadders]);
 
-        const collectionRef = getLadderCollectionRef();
-        if (!collectionRef) return;
-
-        const unsubscribe = onSnapshot(collectionRef, (snapshot) => {
-            const loadedLadders = snapshot.docs.map(doc => {
-                const data = doc.data();
-                const ladderData = (() => {
-                    try {
-                        const rawData = data.ladderData;
-                        return typeof rawData === 'string' ? JSON.parse(rawData) : [];
-                    } catch (e) {
-                        console.error("Error parsing ladderData JSON for doc:", doc.id, e);
-                        return []; 
-                    }
-                })();
-
-                return {
-                    id: doc.id,
-                    ...data,
-                    ladderData: ladderData,
-                };
-            });
-
-            setAllLadders(loadedLadders);
-
-            if (!selectedLadderId && loadedLadders.length > 0) {
-                setSelectedLadderId(loadedLadders[0].id);
-            } else if (selectedLadderId && !loadedLadders.some(l => l.id === selectedLadderId)) {
-                setSelectedLadderId(loadedLadders.length > 0 ? loadedLadders[0].id : null);
-            }
-
-            setIsLoading(false); 
-
-        }, (error) => {
-            console.error("Error listening to ladders collection:", error);
-            setMessage('Error loading ladders.');
-            setIsLoading(false);
-        });
-
-        return () => unsubscribe();
-    }, [isAuthReady, userId, db, getLadderCollectionRef, selectedLadderId]);
-
+    // Win Confirmation Timeout Effect
     useEffect(() => {
         let timer;
         if (winClickState === 'pending') {
@@ -189,7 +77,7 @@ const App = () => {
                 setMessage('Confirmation window expired. Tap Win again.');
             }, WIN_TIMEOUT_MS);
         }
-
+        
         return () => { if (timer) clearTimeout(timer); };
     }, [winClickState]); 
 
@@ -204,7 +92,7 @@ const App = () => {
         while (currentStake < finalGoal && day <= MAX_DAYS) {
             const profit = calculateProfit(currentStake, oddsStr);
             const nextBalance = currentStake + profit;
-
+            
             ladder.push({
                 day,
                 stake: currentStake,
@@ -227,9 +115,7 @@ const App = () => {
         return allLadders.find(l => l.id === selectedLadderId) || null;
     }, [allLadders, selectedLadderId]);
 
-    const handleNewLadder = async () => {
-        if (!db || !userId) return;
-
+    const handleNewLadder = () => {
         const sanitizedStart = startStakeInput.replace(/[^0-9.]/g, '');
         const sanitizedGoal = goalAmountInput.replace(/[^0-9.]/g, '');
         const newName = ladderNameInput.trim();
@@ -242,84 +128,76 @@ const App = () => {
             return;
         }
 
-        setIsSaving(true);
-        try {
-            const newLadderData = calculateLadder(newStart, newGoal, newOdds);
-            if (newLadderData.length === 0) {
-                 setMessage('Calculation error. Ladder length is zero. Check odds format (+XXX or -XXX).');
-                 return;
-            }
-
-            const newLadder = {
-                name: newName,
-                startStake: newStart,
-                goalAmount: newGoal,
-                odds: newOdds,
-                currentAmount: newStart, 
-                currentDayIndex: 0,
-                ladderData: JSON.stringify(newLadderData),
-                timestamp: new Date().toISOString(),
-            };
-
-            const colRef = getLadderCollectionRef();
-            if (!colRef) throw new Error("Collection reference missing.");
-
-            const docRef = await addDoc(colRef, newLadder);
-
-            setSelectedLadderId(docRef.id);
-            setLadderNameInput('');
-            setStartStakeInput('');
-            setGoalAmountInput('');
-            setOddsInput('');
-            setMessage(`New ladder "${newName}" created.`);
-        } catch (error) {
-            console.error("Failed to create new ladder:", error);
-            setMessage('Error creating ladder.');
-        } finally {
-            setIsSaving(false);
+        const newLadderData = calculateLadder(newStart, newGoal, newOdds);
+        if (newLadderData.length === 0) {
+            setMessage('Calculation error. Check odds format (+XXX or -XXX).');
+            return;
         }
+
+        const newLadder = {
+            id: Date.now().toString(),
+            name: newName,
+            startStake: newStart,
+            goalAmount: newGoal,
+            odds: newOdds,
+            currentAmount: newStart, 
+            currentDayIndex: 0,
+            ladderData: newLadderData,
+            timestamp: new Date().toISOString(),
+        };
+        
+        setAllLadders(prev => [...prev, newLadder]);
+        setSelectedLadderId(newLadder.id);
+        setLadderNameInput('');
+        setStartStakeInput('');
+        setGoalAmountInput('');
+        setOddsInput('');
+        setMessage(`New ladder "${newName}" created.`);
     };
 
-    const handleProgressUpdate = async (type) => {
-        if (!activeLadder || !db || isSaving) return;
-
-        const docRef = getLadderDocRef(activeLadder.id);
-        if (!docRef) return;
-
+    const handleProgressUpdate = (type) => {
+        if (!activeLadder || isSaving) return;
+        
         setIsSaving(true);
-
-        try {
-            if (type === 'WIN') {
-                if (activeLadder.currentDayIndex >= activeLadder.ladderData.length) {
-                    setMessage('Goal already reached. No more steps.');
-                    return;
-                }
-
-                const completedStep = activeLadder.ladderData[activeLadder.currentDayIndex];
-                const newAmount = completedStep.isGoalDay ? activeLadder.goalAmount : completedStep.nextBalance;
-
-                await updateDoc(docRef, {
-                    currentAmount: newAmount,
-                    currentDayIndex: activeLadder.currentDayIndex + 1,
-                    timestamp: new Date().toISOString(),
-                });
-
-                setMessage(completedStep.isGoalDay ? `GOAL REACHED! Final Payout: ${formatCurrency(newAmount)}.` : `WIN confirmed! Day ${activeLadder.currentDayIndex + 1} complete.`);
-
-            } else if (type === 'LOSS') {
-                await updateDoc(docRef, {
-                    currentAmount: activeLadder.startStake,
-                    currentDayIndex: 0,
-                    timestamp: new Date().toISOString(),
-                });
-                setMessage(`LOSS. Ladder "${activeLadder.name}" reset to $${activeLadder.startStake.toFixed(2)}.`);
+        
+        if (type === 'WIN') {
+            if (activeLadder.currentDayIndex >= activeLadder.ladderData.length) {
+                setMessage('Goal already reached. No more steps.');
+                setIsSaving(false);
+                return;
             }
-        } catch (error) {
-            console.error(`Failed to handle ${type}:`, error);
-            setMessage(`Error processing ${type}.`);
-        } finally {
-            setIsSaving(false);
+            
+            const completedStep = activeLadder.ladderData[activeLadder.currentDayIndex];
+            const newAmount = completedStep.isGoalDay ? activeLadder.goalAmount : completedStep.nextBalance;
+            
+            setAllLadders(prev => prev.map(ladder => 
+                ladder.id === activeLadder.id 
+                    ? {
+                        ...ladder,
+                        currentAmount: newAmount,
+                        currentDayIndex: ladder.currentDayIndex + 1,
+                        timestamp: new Date().toISOString()
+                    }
+                    : ladder
+            ));
+            
+            setMessage(completedStep.isGoalDay ? `GOAL REACHED! Final Payout: ${formatCurrency(newAmount)}.` : `WIN confirmed! Day ${activeLadder.currentDayIndex + 1} complete.`);
+
+        } else if (type === 'LOSS') {
+            setAllLadders(prev => prev.map(ladder => 
+                ladder.id === activeLadder.id 
+                    ? {
+                        ...ladder,
+                        currentAmount: ladder.startStake,
+                        currentDayIndex: 0,
+                        timestamp: new Date().toISOString()
+                    }
+                    : ladder
+            ));
+            setMessage(`LOSS. Ladder "${activeLadder.name}" reset to $${activeLadder.startStake.toFixed(2)}.`);
         }
+        
+        setIsSaving(false);
     };
 
     const handleWinTap = () => {
@@ -328,30 +206,20 @@ const App = () => {
         if (winClickState === 'ready') {
             setWinClickState('pending');
             setMessage(`Tap WIN again to confirm Step ${activeLadder.currentDayIndex + 1} success.`);
-
+            
         } else if (winClickState === 'pending') {
             setWinClickState('ready');
             handleProgressUpdate('WIN');
         }
     };
 
-    const handleConfirmDelete = async () => {
-        if (!activeLadder || !db || !isDeletePending) return;
+    const handleConfirmDelete = () => {
+        if (!activeLadder || !isDeletePending) return;
 
-        setIsSaving(true);
-        try {
-            const docRef = getLadderDocRef(activeLadder.id);
-            if (!docRef) throw new Error("Document reference missing.");
-            await deleteDoc(docRef);
-            setSelectedLadderId(null); 
-            setMessage(`Ladder "${activeLadder.name}" deleted.`);
-        } catch (error) {
-            console.error("Failed to delete ladder:", error);
-            setMessage('Error deleting ladder.');
-        } finally {
-            setIsSaving(false);
-            setIsDeletePending(false);
-        }
+        setAllLadders(prev => prev.filter(ladder => ladder.id !== activeLadder.id));
+        setSelectedLadderId(allLadders.length > 1 ? allLadders[0].id : null);
+        setMessage(`Ladder "${activeLadder.name}" deleted.`);
+        setIsDeletePending(false);
     };
 
     const formatCurrency = (value) => `$${parseFloat(value).toFixed(2)}`;
@@ -368,7 +236,7 @@ const App = () => {
         if (!isLadderReady) return null;
 
         const { ladderData, currentDayIndex, odds } = activeLadder;
-
+        
         const tableHeaderClasses = "px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider bg-gray-950";
 
         return (
@@ -386,9 +254,9 @@ const App = () => {
                         {ladderData.map((step) => {
                             const isCurrent = step.day === currentDayIndex + 1 && !isGoalReached;
                             const isCompleted = step.day <= currentDayIndex;
-
+                            
                             const profitTextColor = isCompleted ? 'text-emerald-400' : 'text-gray-400';
-
+                            
                             const rowClasses = isCompleted
                                 ? 'bg-emerald-900/10 text-emerald-300 opacity-90'
                                 : isCurrent
@@ -408,48 +276,18 @@ const App = () => {
                 </table>
             </div>
         );
-    }, [isLadderReady, activeLadder, isGoalReached, activeLadder?.currentDayIndex]); 
-
-    if (initError) {
-        return (
-            <div className="min-h-screen bg-red-950 flex items-center justify-center font-inter text-white p-4">
-                <div className="text-center p-8 rounded-2xl bg-red-800 border-4 border-red-500 shadow-2xl">
-                    <AlertTriangle className="h-12 w-12 text-red-300 mx-auto mb-4" />
-                    <h2 className="text-xl font-bold text-red-100 mb-2">CRITICAL APP ERROR</h2>
-                    <p className="text-sm text-red-200 mb-4">The application failed to initialize or authenticate with Firebase.</p>
-                    <p className="text-xs text-red-300 font-mono break-all">{initError}</p>
-                    <p className="mt-4 text-xs text-red-400">If this persists, please provide the console log for further debugging.</p>
-                </div>
-            </div>
-        );
-    }
-
-    if (isLoading) {
-        return (
-            <div className="min-h-screen bg-gray-950 flex items-center justify-center font-inter text-white">
-                <div className="text-center p-8 rounded-2xl bg-gray-800 shadow-2xl border border-gray-700">
-                    <svg className="animate-spin h-8 w-8 text-sky-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <p className="text-sm text-gray-400 font-semibold">{message}</p>
-                </div>
-            </div>
-        );
-    }
+    }, [isLadderReady, activeLadder, isGoalReached]);
 
     return (
         <div className="min-h-screen bg-gray-900 p-4 sm:p-6 font-inter flex justify-center text-white relative">
             <div className="w-full max-w-4xl bg-gray-900/95 backdrop-blur-sm shadow-2xl rounded-2xl p-6 space-y-8 border border-gray-800 pb-32">
                 <h1 className="text-4xl font-extrabold text-center text-sky-400 pt-2 pb-1">EssieSbk Ladder Manager</h1>
-
+                
                 <div className="flex justify-between items-center pb-2 border-b border-gray-700">
                     <p className="text-sm text-gray-500 font-medium">Multi-Step Progress Tracker</p>
-                    {userId && (
-                        <div className="text-xs text-right text-gray-500">
-                            Session ID: <span className="font-mono text-gray-400 break-all">{userId}</span>
-                        </div>
-                    )}
+                    <div className="text-xs text-right text-gray-500">
+                        <span className="font-mono text-gray-400">Browser Storage</span>
+                    </div>
                 </div>
 
                 <div className="p-4 rounded-xl bg-gray-800 border border-sky-700/50 shadow-inner">
@@ -493,7 +331,6 @@ const App = () => {
                             <div className="space-x-2">
                                 <button 
                                     onClick={handleConfirmDelete} 
-                                    disabled={isSaving}
                                     className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition"
                                 >
                                     Delete
@@ -520,7 +357,6 @@ const App = () => {
                             onChange={(e) => setLadderNameInput(e.target.value)}
                             className="mt-1 block w-full rounded-lg border-gray-700 bg-gray-950 text-white shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500"
                             placeholder="e.g., Monthly High Roller"
-                            disabled={isSaving}
                         />
                     </div>
                     <div>
@@ -533,7 +369,6 @@ const App = () => {
                             onChange={(e) => setStartStakeInput(e.target.value)}
                             className="mt-1 block w-full rounded-lg border-gray-700 bg-gray-950 text-white shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500"
                             placeholder="100.00"
-                            disabled={isSaving}
                         />
                     </div>
                     <div>
@@ -546,7 +381,6 @@ const App = () => {
                             onChange={(e) => setGoalAmountInput(e.target.value)}
                             className="mt-1 block w-full rounded-lg border-gray-700 bg-gray-950 text-white shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500"
                             placeholder="1000.00"
-                            disabled={isSaving}
                         />
                     </div>
                     <div className="col-span-2 sm:col-span-1">
@@ -558,7 +392,6 @@ const App = () => {
                             onChange={(e) => setOddsInput(e.target.value)}
                             className="mt-1 block w-full rounded-lg border-gray-700 bg-gray-950 text-white shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500"
                             placeholder="+150 or -110"
-                            disabled={isSaving}
                         />
                     </div>
                     <div className="sm:col-span-1 flex items-end">
@@ -567,7 +400,7 @@ const App = () => {
                             disabled={isSaving || !ladderNameInput.trim() || !startStakeInput.trim() || !goalAmountInput.trim() || !oddsInput.trim()}
                             className="w-full py-3 px-4 rounded-lg shadow-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-gray-900 transition duration-150 disabled:bg-indigo-900 disabled:text-gray-500"
                         >
-                           {isSaving ? 'Calculating...' : 'Create New Ladder'}
+                           Create New Ladder
                         </button>
                     </div>
                 </div>
@@ -583,7 +416,7 @@ const App = () => {
                                 </p>
                             </div>
                         )}
-
+                        
                         <div className="bg-sky-900/70 p-4 rounded-xl text-white shadow-xl shadow-sky-900/50">
                             <div className="grid grid-cols-2 gap-4 text-center">
                                 <div>
@@ -607,7 +440,7 @@ const App = () => {
                                 <div>
                                     <p className="text-center font-bold text-sm text-gray-400">Next Stake (Day {activeLadder.currentDayIndex + 1})</p>
                                     <p className="text-center text-5xl font-extrabold text-sky-400 mt-1">{formatCurrency(nextDayStake)}</p>
-
+                                    
                                     <div className="mt-4 pt-3 border-t border-gray-700">
                                         <div className="flex justify-between items-center mb-1">
                                             <p className="text-sm font-semibold text-gray-300">Target Profit ({activeLadder.odds})</p>
@@ -677,7 +510,7 @@ const App = () => {
                         Loss (Restart Ladder)
                     </button>
                 </div>
-
+                
                 <h2 className="text-xl font-bold text-gray-300 pt-8 border-t border-gray-700 mt-8">
                     {activeLadder ? `Full Ladder Steps for "${activeLadder.name}"` : 'Ladder Steps Preview'}
                 </h2>
