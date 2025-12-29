@@ -1,0 +1,39 @@
+name: Tertiary Keep-Alive Monitor
+
+on:
+  schedule:
+    # Run every 15 minutes
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+jobs:
+  keep-alive-ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Site to Keep Alive
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" https://essieandmillions.github.io/sbkladdergen/ || echo "000")
+          echo "📡 Keep-Alive Ping: $RESPONSE"
+
+          if [ "$RESPONSE" != "200" ]; then
+            echo "⚠️ TERTIARY ALERT: Site unreachable!"
+          else
+            echo "✅ Site is responding normally"
+          fi
+
+      - name: Trigger Primary Monitor if Down
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'primary-health-monitor.yml',
+              ref: 'main'
+            })
+
+      - name: Log Health Status
+        run: |
+          echo "🕐 Timestamp: $(date)"
+          echo "🔗 URL: https://essieandmillions.github.io/sbkladdergen/"
