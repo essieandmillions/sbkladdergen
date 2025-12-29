@@ -1,0 +1,57 @@
+name: Secondary Health Monitor (Backup)
+
+on:
+  schedule:
+    # Run every 10 minutes (offset from primary)
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch:
+
+jobs:
+  backup-health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Site Health
+        id: health
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" https://essieandmillions.github.io/sbkladdergen/ || echo "000")
+          echo "status_code=$RESPONSE" >> $GITHUB_OUTPUT
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ BACKUP ALERT: Site is DOWN! Status: $RESPONSE"
+            exit 1
+          else
+            echo "✅ BACKUP: Site is healthy! Status: $RESPONSE"
+          fi
+
+      - name: Checkout Repository
+        if: failure()
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: failure()
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        if: failure()
+        run: npm ci
+
+      - name: Build Application
+        if: failure()
+        run: npm run build
+        env:
+          CI: false
+
+      - name: Deploy to GitHub Pages
+        if: failure()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build
+
+      - name: Notify Backup Healing
+        if: failure()
+        run: |
+          echo "🔄 BACKUP MONITOR: Site was down. Emergency deployment triggered!"
+          echo "⏰ Timestamp: $(date)"
