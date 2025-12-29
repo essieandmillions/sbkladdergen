@@ -1,0 +1,58 @@
+name: Primary Health Monitor
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Site Health
+        id: health
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" https://essieandmillions.github.io/sbkladdergen/ || echo "000")
+          echo "status_code=$RESPONSE" >> $GITHUB_OUTPUT
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ Site is DOWN! Status: $RESPONSE"
+            exit 1
+          else
+            echo "✅ Site is UP! Status: $RESPONSE"
+          fi
+
+      - name: Checkout Repository
+        if: failure()
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: failure()
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        if: failure()
+        run: npm ci
+
+      - name: Build Application
+        if: failure()
+        run: npm run build
+        env:
+          CI: false
+
+      - name: Deploy to GitHub Pages
+        if: failure()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build
+          cname: sbkladdergen.github.io
+
+      - name: Notify Healing
+        if: failure()
+        run: |
+          echo "🔄 Site was down. Auto-healing deployment triggered!"
+          echo "⏰ Timestamp: $(date)"
